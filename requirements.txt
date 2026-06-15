@@ -1,0 +1,18 @@
+# skill-secret dependencies
+#
+# By default this installs the full stack so the vault can run in
+# semantic (sentence-transformers) mode. If you want a minimal
+# install that runs in keyword mode only, comment out the
+# "# --- semantic mode stack ---" block below and re-run pip install.
+
+cryptography>=43.0.0,<46.0.0
+
+# --- semantic mode stack (comment out for keyword-only mode) ---
+sentence-transformers==3.0.1
+torch==2.3.1
+numpy==1.26.4
+transformers==4.44.2
+huggingface-hub==0.24.6
+tokenizers==0.19.1
+safetensors==0.4.4
+# ---------------------------------------------------------------
