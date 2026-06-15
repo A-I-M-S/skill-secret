@@ -1,4 +1,4 @@
-# skill-sccret
+# skill-secret
 
 ## Person A creates the vault:
 
