@@ -33,6 +33,102 @@ auto-detects its presence and falls back to a BM25-lite keyword scorer.
 
 ## Usage
 
+### Examples
+
+These are the canonical flows. The agent should follow them literally.
+
+**1. Person A saves a secret.**
+
+> User: "Agent, save 'The physical keys are hidden under the fake rock in the garden' to `vault.enc` using password 'KeepItSecret99'."
+
+```bash
+python3 secret.py encrypt \
+    --password "KeepItSecret99" \
+    --file "vault.enc" \
+    --content "The physical keys are hidden under the fake rock in the garden"
+```
+
+Agent sees on stdout: `SUCCESS: Stored 1 chunk.`
+
+**2. Person A adds another secret to the same vault later.**
+
+> User: "Agent, append 'Wi-Fi password is Guest2026 and the router is in the closet' to `vault.enc` using password 'KeepItSecret99'."
+
+```bash
+python3 secret.py encrypt \
+    --password "KeepItSecret99" \
+    --file "vault.enc" \
+    --content "Wi-Fi password is Guest2026 and the router is in the closet"
+```
+
+Agent sees on stdout: `SUCCESS: Appended. Vault now has 2 chunks.`
+
+**3. Person B asks a question — only the relevant chunk is returned.**
+
+> User: "Agent, search `vault.enc` for 'Where are the keys?' using password 'KeepItSecret99'."
+
+```bash
+python3 secret.py decrypt \
+    --password "KeepItSecret99" \
+    --file "vault.enc" \
+    --query "Where are the keys?"
+```
+
+Agent receives on stdout:
+
+```
+--- MATCH FOUND ---
+The physical keys are hidden under the fake rock in the garden
+```
+
+Agent also receives on stderr: `MODE: keyword` (or `MODE: semantic` if the ML model is installed).
+
+The agent returns the matched chunk to the user. **The Wi-Fi password chunk is never decrypted into the agent's context** — the script deliberately returns only the single best-matching chunk. This is the privacy property the skill is built around.
+
+**4. Force the keyword mode (no ML model required).**
+
+If `sentence-transformers` is not installed, `--mode auto` will already pick keyword. To force it explicitly — or to skip the startup cost of the ML model on a slow machine — pass `--mode keyword`:
+
+```bash
+python3 secret.py decrypt \
+    --password "KeepItSecret99" \
+    --file "vault.enc" \
+    --query "wifi credentials" \
+    --mode keyword
+```
+
+The `--threshold` flag can be lowered (e.g. `--threshold 0.01`) for a more permissive match.
+
+**5. The search finds nothing.**
+
+> User: "Agent, search `vault.enc` for 'What is the nuclear launch code?' using password 'KeepItSecret99'."
+
+```bash
+python3 secret.py decrypt \
+    --password "KeepItSecret99" \
+    --file "vault.enc" \
+    --query "What is the nuclear launch code?"
+```
+
+Agent receives on stdout: `No highly relevant information found matching those parameters.`
+
+Exit code is still `0` — "no confident match" is a normal outcome, not an error. The agent should tell the user the vault does not contain anything matching, not interpret this as a failure.
+
+**6. The wrong password is rejected.**
+
+> User: "Agent, search `vault.enc` for 'keys' using password 'oops'."
+
+```bash
+python3 secret.py decrypt \
+    --password "oops" \
+    --file "vault.enc" \
+    --query "keys"
+```
+
+Agent receives on stdout: `ERROR: Wrong password.` (exit code `2`). The agent should tell the user the password was rejected and ask them to try again. The vault on disk is unchanged.
+
+---
+
 ### Create or append to a vault
 
 ```bash
