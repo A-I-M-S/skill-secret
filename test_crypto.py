@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import crypto
 from cryptography.fernet import InvalidToken
-from secret import DEFAULT_PBKDF2_ITERS, SALT_SIZE
+from crypto import DEFAULT_PBKDF2_ITERS, SALT_SIZE
 
 
 class TestCrypto(unittest.TestCase):

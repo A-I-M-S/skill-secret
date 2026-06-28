@@ -1,80 +1,115 @@
 ---
 name: skill-secret
-description: Manages an encrypted document vault. Stores password-protected content and returns the single best-matching chunk in response to a natural-language query. Runs locally with no network access.
+description: Manages an encrypted note vault backed by a Notion database. Stores password-protected notes and returns the single best-matching note in response to a natural-language query. Search runs server-side on Notion.
 ---
 
-# Secret Courier Vault
+# Secret Courier Vault (v3)
 
-Use this skill to encrypt new information into a password-protected vault and
-to semantically (or by keyword) search through existing vaults. You must
-always invoke the `secret.py` script via your execution tool. The project
-ships a `bin/secret` wrapper that dispatches to the project venv
-(`.venv/bin/python`) — use it instead of `python3 secret.py` so the
-sentence-transformers stack is on PYTHONPATH. The script returns at most
-one matching chunk per query; the rest of the vault is hidden from your
-session.
+Use this skill to store secrets as notes in a private Notion database and to
+retrieve them later via a natural-language query. The Notion API token is
+itself encrypted under the user's password and stored locally in `.env`; the
+script invokes the Notion API to do the actual search and returns only the
+single best-matching note. You must always invoke the `secret.py` script via
+your execution tool. The project ships a `bin/secret` wrapper that dispatches
+to the project venv (`.venv/bin/python`) — use it instead of `python3
+secret.py` so the right environment is on PYTHONPATH.
+
+The first run creates a Notion database (`skill-secret-vault`) under the
+parent page the user supplies, then writes `.env` next to the working
+directory. Subsequent runs read `.env`, decrypt the Notion token, and call
+the Notion API.
 
 ## 🛡️ CORE RULES
 
 1. **Never reveal passwords** in your responses. The user provides the
    password; you pass it via `--password` and never echo it.
-2. **Never output the entire decrypted contents** of a file. Only return the
-   targeted answer from a search. There is intentionally no `--list` or
-   `--dump` flag.
+2. **Never reveal the Notion API token** in your responses. It lives in
+   `.env` (encrypted at rest with the user's password) and you must not
+   print it, log it, or surface it on the wire.
+3. **Never output the entire database** of notes. Only the single
+   best-matching note from `retrieve` is returned. There is intentionally
+   no `--list` or `--dump` flag.
 
 ## 🛠️ Commands
 
-### 1. Storing / appending information
+Every command accepts the optional top-level `--env-file PATH` flag, which
+overrides `$SKILL_SECRET_ENV` and the default `./$CWD/.env` lookup.
+
+### 1. `init` — initialize a new KMS database
 
 ```
-bin/secret encrypt \
+bin/secret init \
+    --env-file "$ENV" \
+    --notion-token "<notion_internal_integration_token>" \
+    --parent-page-id "<notion_page_uuid>" \
+    --password "<password>"
+```
+
+- Creates a Notion database titled `skill-secret-vault` under the supplied
+  parent page (the parent page must already be shared with the integration).
+- Encrypts the Notion token under the user's password (PBKDF2-HMAC-SHA256,
+  720,000 iterations, 16-byte salt) and writes the base64 blob plus the
+  database id and parent page id to `.env` with file mode `0o600`.
+- The plaintext Notion token is **never** written to disk; only its
+  ciphertext is.
+
+Refuses to run if `.env` already exists at the resolved path (exit code 5).
+
+### 2. `take` — store a note in the KMS
+
+```
+bin/secret take \
+    --env-file "$ENV" \
     --password "<password>" \
-    --file "<filename>" \
-    --content "<content>"
+    --content "<note body>"
 ```
 
-(equivalent: `.venv/bin/python secret.py ...` — use the wrapper unless you
-have a reason to bypass it.)
+- Reads `.env`, decrypts the Notion token using the password, and creates a
+  new page in the `skill-secret-vault` database whose body is `--content`.
+- `--content` may be any length; Notion enforces its own page-size limit.
 
-Behavior:
-- If the file does not exist, it is created and the content is stored as
-  chunk 0.
-- If the file exists, the password is verified (by authenticating the
-  header MAC and the first chunk) and the content is appended as a new
-  chunk. The existing salt and iteration count are preserved.
-
-Success responses (stdout, one line):
-- `SUCCESS: Stored 1 chunk.`
-- `SUCCESS: Appended. Vault now has N chunks.`
-
-### 2. Searching information
+### 3. `retrieve` — fetch the top-1 matching note
 
 ```
-bin/secret decrypt \
+bin/secret retrieve \
+    --env-file "$ENV" \
     --password "<password>" \
-    --file "<filename>" \
-    --query "<search_parameters>" \
-    [--mode {auto,semantic,keyword}] \
-    [--threshold FLOAT] \
-    [--top-k INT]
+    --query "<natural_language_query>"
 ```
 
-Flags:
-- `--mode` (default `auto`): `auto` picks semantic if the model is
-  importable, else keyword. Use `semantic` to force the ML model or
-  `keyword` to force the BM25-lite fallback.
-- `--threshold` (default `0.30` for semantic, `0.05` for keyword): minimum
-  score to return a match. Lower = more permissive.
-- `--top-k` (default `1`): number of chunks to return. Default is 1; the
-  script will not dump the whole vault regardless of this value.
+- Reads `.env`, decrypts the Notion token, and runs a Notion-side search
+  over the `skill-secret-vault` database for pages matching `--query`.
+- Notion returns the top result; the script prints only that one page's
+  body to stdout. Other pages in the database are never decrypted into the
+  agent's context.
+- Writes `MODE: notion` to stderr before printing the result.
 
-Search responses (stdout):
-- Match: `--- MATCH FOUND ---\n<chunk plaintext>`
-- No confident match: `No highly relevant information found matching those parameters.`
-- Empty vault: `Vault is empty.`
+### 4. `whoami` — show sanitized account info
 
-Mode banner (stderr, one line, on every successful search):
-- `MODE: semantic` or `MODE: keyword`
+```
+bin/secret whoami \
+    --env-file "$ENV" \
+    --password "<password>"
+```
+
+- Reads `.env`, decrypts the Notion token, calls Notion's `/v1/users/me`
+  endpoint, and prints `bot_id` and `workspace_name` (sanitized: empty
+  string if Notion returns a falsy value). Does **not** print the Notion
+  token, the page id, the database id, or any other credential material.
+
+### Top-level `--env-file` flag
+
+```
+bin/secret [--env-file PATH] <subcommand> [...]
+```
+
+- If `--env-file PATH` is given, that path is used.
+- Else `$SKILL_SECRET_ENV` (if set) is used.
+- Else `./.env` relative to the current working directory is used.
+
+This lets users keep multiple vaults side by side (e.g. `--env-file
+~/.env.work`, `--env-file ~/.env.personal`) without the agent having to
+manage `cd` between runs.
 
 ## 🚨 Error paths
 
@@ -83,64 +118,52 @@ verbatim to map to a user-facing message.
 
 | Condition | stdout | Exit |
 |---|---|---|
-| Wrong password on `decrypt` | `ERROR: Wrong password.` | 2 |
-| Wrong password on `encrypt` (append) | `ERROR: Wrong password. Append rejected.` | 2 |
-| File missing | `ERROR: Vault file does not exist: <path>` | 4 |
-| Header / file structurally corrupt | `ERROR: Vault file is corrupt or tampered (header).` | 3 |
-| All chunks unreadable (every chunk failed decryption) | `ERROR: Vault file is corrupt or tampered (no readable chunks).` | 3 |
+| Not initialized (`.env` missing) | `ERROR: Not initialized. Run init first.` | 4 |
+| Already initialized (`.env` exists at init time) | `ERROR: Already initialized. Delete .env to re-init.` | 5 |
+| `.env` unreadable (permissions, malformed, missing keys) | `ERROR: .env is unreadable: <reason>` | 4 |
+| Wrong password (decrypting the Notion token fails) | `ERROR: Wrong password.` | 2 |
+| Notion API error during init / take / retrieve / whoami | `ERROR: Notion API error: <reason>` | 3 |
+| Notion rejected the integration token at init time | `ERROR: Notion API rejected the token: <reason>` | 3 |
+| Notion could not create the database under the parent page | `ERROR: Could not create database: <reason>` | 3 |
+| Notion could not write the bootstrap page (db_id + blob) | `ERROR: Could not write bootstrap: <reason>` | 3 |
+| Could not write `.env` to disk | `ERROR: Could not write .env: <reason>` | 3 |
 | Bad CLI arguments | argparse usage to stderr | 2 |
-| Unexpected internal error | `ERROR: Internal error: <type>: <msg>` | 1 |
 
-Per-chunk corruption is **not** a fatal error: a single bad chunk is skipped,
-a `WARN: chunk <N> unreadable, skipped` line is written to stderr, and the
-remaining chunks are searched. This is by design — partial recovery is
-preferable to total loss for a personal vault.
+## 🔒 Security properties (v3)
 
-## 🔄 Dependency modes
-
-The skill works in two modes, chosen automatically based on what is
-installed:
-
-- **Semantic mode**: uses `sentence-transformers` with the
-  `all-MiniLM-L6-v2` model. Cosine similarity over sentence embeddings.
-  Better at paraphrased queries, slower to start, requires ~100 MB of
-  dependencies (torch, numpy, transformers).
-- **Keyword mode**: BM25-lite scorer with a small built-in stopword list.
-  Fast, zero extra dependencies beyond `cryptography`. Less forgiving of
-  paraphrase — exact words matter.
-
-If the model is unavailable at runtime and `--mode semantic` was forced, the
-script logs `WARN: sentence-transformers unavailable, falling back to
-keyword mode.` to stderr and continues in keyword mode with a `MODE: keyword`
-banner.
-
-## 🔒 Upgraded security properties (v2)
-
-- **PBKDF2-HMAC-SHA256, 720,000 iterations** for key derivation (was raw
-  SHA-256, no salt, no work factor). This matches the OWASP 2024
-  recommendation and is brute-force resistant against casual attackers.
-- **Per-vault 16-byte random salt.** Two vaults encrypted with the same
-  password produce different ciphertext.
-- **Per-chunk authenticated encryption.** Each chunk is a Fernet token
-  (AES-128-CBC + HMAC-SHA256). Tampering with any chunk is detected at
-  decrypt time; that chunk is skipped and the rest remain searchable.
-- **Header MAC.** A 16-byte HMAC-SHA256 over the header fields,
-  keyed by the password. Wrong password fails this check before any chunk
-  is touched, so an attacker cannot distinguish wrong-password from a
-  real header corruption in a probing attack.
-- **Atomic writes.** Encrypts write to `<filename>.tmp`, `fsync`, then
-  `os.replace`. Power loss mid-write cannot leave a half-written vault.
-- **Local-only.** No network calls. The sentence-transformers model is
-  loaded from the local cache.
+- **PBKDF2-HMAC-SHA256, 720,000 iterations** for key derivation. This
+  matches the OWASP 2024 recommendation and is brute-force resistant
+  against casual attackers.
+- **Per-init 16-byte random salt.** The Notion token is encrypted with a
+  fresh salt each `init`; the salt is embedded in the ciphertext blob so
+  decryption does not need to consult `.env` for it.
+- **Fernet token (AES-128-CBC + HMAC-SHA256).** The encrypted Notion
+  token is a Fernet payload; any tamper to the blob, salt, or iteration
+  count is detected at decrypt time.
+- **The Notion API key is the only secret.** The user's password is a
+  passphrase, not a secret — it is not stored on disk in any form. The
+  Notion token is stored only as the PBKDF2+Fernet ciphertext blob inside
+  `.env`, which is written with file mode `0o600` (and its parent
+  directory with `0o700`).
+- **Search happens server-side.** The script never decrypts note bodies
+  into the local process. `retrieve` asks Notion for the top match and
+  prints only that single page's body. Other notes are never read, never
+  cached, never returned.
+- **No password recovery.** Forgetting the password means losing the
+  ability to decrypt the Notion token — i.e. losing the ability to talk
+  to the KMS. The notes themselves are still on Notion, but they are
+  unreachable from this skill without the password. There is no backdoor
+  and there cannot be one in this design.
 
 ## 🧪 Exit-code summary
 
 - `0` — operation succeeded (including "no confident match" and "empty
-  vault"; these are not errors, they are normal outcomes)
+  database"; these are not errors, they are normal outcomes)
 - `1` — unexpected internal error
 - `2` — wrong password, or bad CLI arguments
-- `3` — vault file corrupt or tampered
-- `4` — vault file does not exist
+- `3` — Notion API error (rejected token, failed create, etc.)
+- `4` — not initialized, or `.env` missing / unreadable
+- `5` — already initialized (refusing to overwrite `.env`)
 
 Exit code 0 does **not** mean a match was found. Always read stdout and
 pattern-match on the specific success/failure strings listed above.
