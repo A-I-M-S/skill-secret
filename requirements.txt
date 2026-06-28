@@ -6,6 +6,9 @@
 # "# --- semantic mode stack ---" block below and re-run pip install.
 
 cryptography>=43.0.0,<46.0.0
+notion-client>=2.2.0,<3.0.0
+
+# Notion KMS client (v3; mandatory for init/take/retrieve/whoami)
 
 # --- semantic mode stack (comment out for keyword-only mode) ---
 sentence-transformers==3.0.1

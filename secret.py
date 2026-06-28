@@ -363,28 +363,104 @@ def handle_decrypt(args):
     _decrypt_and_search(args, effective, threshold, args.top_k, banner)
 
 
+V2_DEPRECATION = (
+    "DEPRECATION: this subcommand is v2; in v3 use 'init' then "
+    "'take' (or 'retrieve'). Will be removed in batch 3."
+)
+
+
+def _emit_v2_deprecation() -> None:
+    sys.stderr.write(V2_DEPRECATION + "\n")
+
+
+def handle_encrypt_v2(args) -> None:
+    _emit_v2_deprecation()
+    handle_encrypt(args)
+
+
+def handle_decrypt_v2(args) -> None:
+    _emit_v2_deprecation()
+    handle_decrypt(args)
+
+
 def main():
-    p = argparse.ArgumentParser(description="Secret Courier Vault")
+    import flows
+
+    p = argparse.ArgumentParser(
+        description="Secret Courier Vault (v3: Notion KMS)",
+    )
+    p.add_argument(
+        "--env-file",
+        default=None,
+        help=(
+            "Path to the .env file (overrides $SKILL_SECRET_ENV "
+            "and ./$CWD/.env)."
+        ),
+    )
     sub = p.add_subparsers(dest="command", required=True)
 
-    e = sub.add_parser("encrypt")
-    e.add_argument("--password", required=True)
-    e.add_argument("--file", required=True)
-    e.add_argument("--content", required=True)
+    init_p = sub.add_parser("init", help="initialize a new KMS database")
+    init_p.add_argument("--notion-token", required=True)
+    init_p.add_argument("--parent-page-id", required=True)
+    init_p.add_argument("--password", required=True)
 
-    d = sub.add_parser("decrypt")
-    d.add_argument("--password", required=True)
-    d.add_argument("--file", required=True)
-    d.add_argument("--query", required=True)
-    d.add_argument("--mode", choices=("auto", "semantic", "keyword"), default="auto")
-    d.add_argument("--threshold", type=float, default=None)
-    d.add_argument("--top-k", type=int, default=TOP_K_DEFAULT)
+    take_p = sub.add_parser("take", help="store a note in the KMS")
+    take_p.add_argument("--password", required=True)
+    take_p.add_argument("--content", required=True)
+
+    retrieve_p = sub.add_parser(
+        "retrieve", help="fetch the top-1 matching note from the KMS"
+    )
+    retrieve_p.add_argument("--password", required=True)
+    retrieve_p.add_argument("--query", required=True)
+
+    whoami_p = sub.add_parser("whoami", help="show sanitized account info")
+    whoami_p.add_argument("--password", required=True)
+
+    enc_p = sub.add_parser(
+        "encrypt",
+        help=argparse.SUPPRESS,
+        description="v2: encrypt content into a local vault file.",
+    )
+    enc_p.add_argument("--password", required=True)
+    enc_p.add_argument("--file", required=True)
+    enc_p.add_argument("--content", required=True)
+
+    dec_p = sub.add_parser(
+        "decrypt",
+        help=argparse.SUPPRESS,
+        description="v2: search a local vault file for a matching chunk.",
+    )
+    dec_p.add_argument("--password", required=True)
+    dec_p.add_argument("--file", required=True)
+    dec_p.add_argument("--query", required=True)
+    dec_p.add_argument(
+        "--mode", choices=("auto", "semantic", "keyword"), default="auto"
+    )
+    dec_p.add_argument("--threshold", type=float, default=None)
+    dec_p.add_argument("--top-k", type=int, default=TOP_K_DEFAULT)
 
     args = p.parse_args()
-    if args.command == "encrypt":
-        handle_encrypt(args)
+
+    if args.command == "init":
+        flows.handle_init(args)
+    elif args.command == "take":
+        flows.handle_take(args)
+    elif args.command == "retrieve":
+        flows.handle_retrieve(args)
+    elif args.command == "whoami":
+        flows.handle_whoami(args)
+    elif args.command == "encrypt":
+        handle_encrypt_v2(args)
+    elif args.command == "decrypt":
+        handle_decrypt_v2(args)
     else:
-        handle_decrypt(args)
+        p.print_usage(sys.stderr)
+        sys.stderr.write(
+            f"secret.py: error: a subcommand is required "
+            f"(init|take|retrieve|whoami)\n"
+        )
+        sys.exit(2)
 
 
 if __name__ == "__main__":
