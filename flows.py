@@ -6,12 +6,12 @@ import sys
 
 import crypto
 import envfile
-import notion_kms
+import supabase_kms
 
 
 ENV_VAR = "SKILL_SECRET_ENV"
-ENV_KEY_DB_ID = "SKILL_SECRET_KMS_DB_ID"
-ENV_KEY_PARENT_PAGE_ID = "SKILL_SECRET_KMS_PARENT_PAGE_ID"
+ENV_KEY_BACKEND = "SKILL_SECRET_KMS_BACKEND"
+ENV_KEY_PROJECT_URL = "SKILL_SECRET_KMS_PROJECT_URL"
 ENV_KEY_API_BLOB = "SKILL_SECRET_KMS_API_BLOB"
 
 
@@ -27,7 +27,7 @@ def _resolve_env_path(args) -> str:
 
 def _load_env_or_exit(env_path: str) -> dict:
     try:
-        data = envfile.read(env_path)
+        data = envfile.read(env_path, strict_v4=True)
     except FileNotFoundError:
         print("ERROR: Not initialized. Run init first.")
         sys.exit(4)
@@ -35,12 +35,9 @@ def _load_env_or_exit(env_path: str) -> dict:
         print(f"ERROR: .env is unreadable: {exc}")
         sys.exit(4)
     try:
-        envfile.require_keys(
-            env_path,
-            [ENV_KEY_DB_ID, ENV_KEY_PARENT_PAGE_ID, ENV_KEY_API_BLOB],
-        )
+        envfile.detect_backend(env_path)
     except ValueError as exc:
-        print(f"ERROR: .env is unreadable: {exc}")
+        print(f"ERROR: Unsupported backend: {exc}")
         sys.exit(4)
     return data
 
@@ -69,77 +66,81 @@ def handle_init(args) -> None:
         print("ERROR: Already initialized. Delete .env to re-init.")
         sys.exit(5)
 
-    notion_token = args.notion_token
+    url = args.url
+    api_key = args.api_key
     password = args.password
-    parent_page_id = args.parent_page_id
 
     try:
-        kms = notion_kms.NotionKMS(notion_token)
-        try:
-            kms.whoami()
-        except notion_kms.NotionKMSError as exc:
-            print(f"ERROR: Notion API rejected the token: {exc}")
-            sys.exit(3)
-    except notion_kms.NotionKMSError as exc:
-        print(f"ERROR: Notion API error: {exc}")
+        kms = supabase_kms.SupabaseKMS(url, api_key)
+        kms.whoami()
+    except supabase_kms.SupabaseKMSError as exc:
+        print(f"ERROR: Supabase API rejected the api-key: {exc}")
+        sys.exit(3)
+    except Exception as exc:  # noqa: BLE001
+        print(f"ERROR: Supabase API error: {exc}")
         sys.exit(3)
 
     try:
-        db_id = kms.ensure_database(parent_page_id, title="skill-secret-vault")
-    except notion_kms.NotionKMSError as exc:
-        print(f"ERROR: Could not create database: {exc}")
+        kms.ensure_schema()
+    except supabase_kms.SupabaseKMSError as exc:
+        print(f"ERROR: Could not verify schema: {exc}")
         sys.exit(3)
 
-    blob = crypto.encrypt_token(notion_token, password)
+    blob = crypto.encrypt_token(api_key, password)
     b64 = base64.b64encode(blob).decode("ascii")
 
     try:
-        kms.set_bootstrap(db_id, b64)
-    except notion_kms.NotionKMSError as exc:
+        kms.set_bootstrap(b64)
+    except supabase_kms.SupabaseKMSError as exc:
         print(f"ERROR: Could not write bootstrap: {exc}")
         sys.exit(3)
 
     try:
         envfile.write(env_path, {
-            ENV_KEY_DB_ID: db_id,
-            ENV_KEY_PARENT_PAGE_ID: parent_page_id,
+            ENV_KEY_BACKEND: "supabase",
+            ENV_KEY_PROJECT_URL: url,
             ENV_KEY_API_BLOB: b64,
         })
     except OSError as exc:
         print(f"ERROR: Could not write .env: {exc}")
         sys.exit(3)
 
-    print(f"SUCCESS: KMS initialized. Database skill-secret-vault ({db_id}).")
+    project_ref = url.split("//", 1)[-1].split(".", 1)[0]
+    print(f"SUCCESS: KMS initialized. Database {project_ref} ({url}).")
 
 
 def handle_take(args) -> None:
     env_path = _resolve_env_path(args)
     data = _load_env_or_exit(env_path)
     token = _decrypt_token_or_exit(data[ENV_KEY_API_BLOB], args.password)
-    db_id = data[ENV_KEY_DB_ID]
+    url = data[ENV_KEY_PROJECT_URL]
 
     try:
-        kms = notion_kms.NotionKMS(token)
-        page_id = kms.create_page(db_id, args.content)
-    except notion_kms.NotionKMSError as exc:
-        _err3("ERROR: Notion API error", exc)
+        kms = supabase_kms.SupabaseKMS(url, token)
+        row_id = kms.create_note(args.content)
+    except supabase_kms.SupabaseKMSError as exc:
+        _err3("ERROR: Supabase API error", exc)
+    except Exception as exc:  # noqa: BLE001
+        _err3("ERROR: Supabase API error", exc)
 
-    print(f"SUCCESS: Stored. Page id {page_id}.")
+    print(f"SUCCESS: Stored. Row id {row_id}.")
 
 
 def handle_retrieve(args) -> None:
     env_path = _resolve_env_path(args)
     data = _load_env_or_exit(env_path)
     token = _decrypt_token_or_exit(data[ENV_KEY_API_BLOB], args.password)
-    db_id = data[ENV_KEY_DB_ID]
+    url = data[ENV_KEY_PROJECT_URL]
 
-    sys.stderr.write("MODE: notion\n")
+    sys.stderr.write("MODE: supabase\n")
 
     try:
-        kms = notion_kms.NotionKMS(token)
-        results = kms.search(db_id, args.query)
-    except notion_kms.NotionKMSError as exc:
-        _err3("ERROR: Notion API error", exc)
+        kms = supabase_kms.SupabaseKMS(url, token)
+        results = kms.search(args.query, limit=1)
+    except supabase_kms.SupabaseKMSError as exc:
+        _err3("ERROR: Supabase API error", exc)
+    except Exception as exc:  # noqa: BLE001
+        _err3("ERROR: Supabase API error", exc)
 
     if not results:
         print("No highly relevant information found matching those parameters.")
@@ -153,16 +154,19 @@ def handle_whoami(args) -> None:
     env_path = _resolve_env_path(args)
     data = _load_env_or_exit(env_path)
     token = _decrypt_token_or_exit(data[ENV_KEY_API_BLOB], args.password)
+    url = data[ENV_KEY_PROJECT_URL]
 
     try:
-        kms = notion_kms.NotionKMS(token)
+        kms = supabase_kms.SupabaseKMS(url, token)
         info = kms.whoami()
-    except notion_kms.NotionKMSError as exc:
-        _err3("ERROR: Notion API error", exc)
+    except supabase_kms.SupabaseKMSError as exc:
+        _err3("ERROR: Supabase API error", exc)
+    except Exception as exc:  # noqa: BLE001
+        _err3("ERROR: Supabase API error", exc)
 
-    bot_id = info.get("bot_id") or ""
-    workspace = info.get("workspace_name") or ""
-    print(f"--- ACCOUNT ---\nbot_id: {bot_id}\nworkspace: {workspace}")
+    project_url = info.get("project_url") or url
+    anon_key = info.get("anon_key_id") or ""
+    print(f"--- ACCOUNT ---\nproject: {project_url}\nanon_key: {anon_key}")
 
 
 __all__ = [
@@ -172,7 +176,7 @@ __all__ = [
     "handle_take",
     "handle_retrieve",
     "handle_whoami",
-    "ENV_KEY_DB_ID",
-    "ENV_KEY_PARENT_PAGE_ID",
+    "ENV_KEY_BACKEND",
+    "ENV_KEY_PROJECT_URL",
     "ENV_KEY_API_BLOB",
 ]

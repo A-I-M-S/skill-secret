@@ -5,66 +5,66 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from argparse import Namespace
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import envfile
 import flows
-import notion_kms
+import supabase_kms
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-class _FakeNotionClient:
-    USERS = MagicMock()
-    DATABASES = MagicMock()
-    PAGES = MagicMock()
-    SEARCH = MagicMock()
+class _FakeSupabaseClient:
+    AUTH = MagicMock()
+    TABLE = MagicMock()
+    RPC = MagicMock()
 
-    def __init__(self, auth=None):
-        self.auth = auth
-        self.users = _FakeNotionClient.USERS
-        self.databases = _FakeNotionClient.DATABASES
-        self.pages = _FakeNotionClient.PAGES
-        self.search = _FakeNotionClient.SEARCH
+    def __init__(self, url=None, key=None):
+        self._url = url
+        self._key = key
+        self.auth = _FakeSupabaseClient.AUTH
+        self.table = MagicMock(return_value=_FakeSupabaseClient.TABLE)
+        self.rpc = MagicMock(return_value=_FakeSupabaseClient.RPC)
 
     @classmethod
     def reset_mocks(cls):
-        cls.USERS = MagicMock()
-        cls.DATABASES = MagicMock()
-        cls.PAGES = MagicMock()
-        cls.SEARCH = MagicMock()
+        cls.AUTH = MagicMock()
+        cls.TABLE = MagicMock()
+        cls.RPC = MagicMock()
 
 
-def _install_fake_notion():
-    import types
-
-    _FakeNotionClient.reset_mocks()
-    mod = types.ModuleType("notion_client")
-    mod.Client = MagicMock(side_effect=_FakeNotionClient)
-    saved = sys.modules.get("notion_client")
-    sys.modules["notion_client"] = mod
+def _install_fake_supabase():
+    _FakeSupabaseClient.reset_mocks()
+    mod = types.ModuleType("supabase")
+    mod.create_client = MagicMock(side_effect=_FakeSupabaseClient)
+    mod.Client = MagicMock()
+    saved = sys.modules.get("supabase")
+    sys.modules["supabase"] = mod
     return mod, saved
 
 
-def _restore_notion(saved):
+def _restore_supabase(saved):
     if saved is None:
-        sys.modules.pop("notion_client", None)
+        sys.modules.pop("supabase", None)
     else:
-        sys.modules["notion_client"] = saved
+        sys.modules["supabase"] = saved
 
 
 class _Args(Namespace):
-    def __init__(self, env_file, notion_token="tok", parent_page_id="parent-1",
+    def __init__(self, env_file, url="https://abc.supabase.co",
+                 api_key="eyJhbGciOiJIUzI1NiJ9.fake.jwt",
                  password="password123"):
         super().__init__()
         self.env_file = env_file
-        self.notion_token = notion_token
-        self.parent_page_id = parent_page_id
+        self.url = url
+        self.api_key = api_key
         self.password = password
 
 
@@ -86,13 +86,13 @@ def _run_handle_init(args):
 
 class TestInitFlow(unittest.TestCase):
     def setUp(self):
-        self._mod, self._saved = _install_fake_notion()
+        self._mod, self._saved = _install_fake_supabase()
         self._tmp = tempfile.TemporaryDirectory(dir=os.getcwd())
         self.addCleanup(self._tmp.cleanup)
         self._env_path = os.path.join(self._tmp.name, ".env")
 
     def tearDown(self):
-        _restore_notion(self._saved)
+        _restore_supabase(self._saved)
         for stale in (self._env_path, self._env_path + ".tmp"):
             if os.path.exists(stale):
                 try:
@@ -100,14 +100,28 @@ class TestInitFlow(unittest.TestCase):
                 except OSError:
                     pass
 
-    def test_01_happy_path_writes_env_and_calls_notion(self):
-        _FakeNotionClient.DATABASES.create.return_value = {"id": "db-new"}
+    def test_01_happy_path_writes_env_and_calls_supabase(self):
+        _FakeSupabaseClient.AUTH.get_user.return_value = {
+            "user": None,
+            "region": "us-west-1",
+        }
+        _FakeSupabaseClient.TABLE.select.return_value.limit.return_value.execute.return_value = (
+            SimpleNamespace(data=[{"id": "schema-ok"}])
+        )
+        _FakeSupabaseClient.TABLE.delete.return_value.eq.return_value.execute.return_value = (
+            SimpleNamespace(data=[])
+        )
+        _FakeSupabaseClient.TABLE.insert.return_value.execute.return_value = (
+            SimpleNamespace(data=[{"id": "boot-row-id"}])
+        )
 
         out, code = _run_handle_init(_Args(env_file=self._env_path))
 
         self.assertEqual(code, 0, f"unexpected exit; stdout={out!r}")
         self.assertTrue(
-            out.startswith("SUCCESS: KMS initialized. Database skill-secret-vault ("),
+            out.startswith(
+                "SUCCESS: KMS initialized. Database abc (https://abc.supabase.co)."
+            ),
             f"stdout did not start with success prefix: {out!r}",
         )
 
@@ -117,23 +131,21 @@ class TestInitFlow(unittest.TestCase):
         )
 
         data = envfile.read(self._env_path)
-        self.assertIn(flows.ENV_KEY_DB_ID, data)
-        self.assertIn(flows.ENV_KEY_PARENT_PAGE_ID, data)
+        self.assertEqual(data[flows.ENV_KEY_BACKEND], "supabase")
+        self.assertEqual(data[flows.ENV_KEY_PROJECT_URL], "https://abc.supabase.co")
         self.assertIn(flows.ENV_KEY_API_BLOB, data)
-        self.assertEqual(data[flows.ENV_KEY_PARENT_PAGE_ID], "parent-1")
 
-        _FakeNotionClient.USERS.me.assert_called_once()
-        _FakeNotionClient.DATABASES.create.assert_called_once()
-        _FakeNotionClient.PAGES.create.assert_called_once()
-
-        create_kwargs = _FakeNotionClient.PAGES.create.call_args.kwargs
-        body = create_kwargs["properties"]["Body"]["rich_text"][0]["text"]["content"]
-        self.assertEqual(body, data[flows.ENV_KEY_API_BLOB])
+        _FakeSupabaseClient.AUTH.get_user.assert_called_once()
+        _FakeSupabaseClient.TABLE.select.assert_called_once_with("id")
+        _FakeSupabaseClient.TABLE.insert.assert_called_once()
+        row = _FakeSupabaseClient.TABLE.insert.call_args.args[0]
+        self.assertEqual(row["kind"], "bootstrap")
+        self.assertEqual(row["body"], data[flows.ENV_KEY_API_BLOB])
 
     def test_02_already_initialized_exits_5(self):
         envfile.write(self._env_path, {
-            flows.ENV_KEY_DB_ID: "db-existing",
-            flows.ENV_KEY_PARENT_PAGE_ID: "p",
+            flows.ENV_KEY_BACKEND: "supabase",
+            flows.ENV_KEY_PROJECT_URL: "https://abc.supabase.co",
             flows.ENV_KEY_API_BLOB: "x",
         })
 
@@ -141,38 +153,49 @@ class TestInitFlow(unittest.TestCase):
 
         self.assertEqual(code, 5)
         self.assertIn("Already initialized", out)
-        _FakeNotionClient.USERS.me.assert_not_called()
-        _FakeNotionClient.DATABASES.create.assert_not_called()
-        _FakeNotionClient.PAGES.create.assert_not_called()
+        _FakeSupabaseClient.AUTH.get_user.assert_not_called()
+        _FakeSupabaseClient.TABLE.insert.assert_not_called()
 
     def test_03_wrong_token_exits_3(self):
-        _FakeNotionClient.USERS.me.side_effect = Exception("invalid token")
+        _FakeSupabaseClient.AUTH.get_user.side_effect = Exception("invalid token")
 
         out, code = _run_handle_init(_Args(env_file=self._env_path))
 
         self.assertEqual(code, 3)
-        self.assertIn("Notion API rejected the token", out)
+        self.assertIn("Supabase API rejected the api-key", out)
         self.assertIn("invalid token", out)
         self.assertFalse(
             os.path.exists(self._env_path),
             ".env must NOT be written when token is rejected",
         )
 
-    def test_04_parent_page_not_accessible_exits_3(self):
-        _FakeNotionClient.SEARCH.side_effect = Exception("page inaccessible")
+    def test_04_schema_missing_exits_3(self):
+        _FakeSupabaseClient.AUTH.get_user.return_value = {"user": None}
+        _FakeSupabaseClient.TABLE.select.return_value.limit.return_value.execute.side_effect = (
+            Exception("schema not provisioned. Run the SQL in _SCHEMA_SQL once")
+        )
 
         out, code = _run_handle_init(_Args(env_file=self._env_path))
 
         self.assertEqual(code, 3)
-        self.assertIn("Could not create database", out)
-        self.assertIn("page inaccessible", out)
+        self.assertIn("Could not verify schema", out)
+        self.assertIn("schema not provisioned", out)
         self.assertFalse(
             os.path.exists(self._env_path),
-            ".env must NOT be written when DB create fails",
+            ".env must NOT be written when schema check fails",
         )
 
     def test_05_env_write_fails_exits_3(self):
-        _FakeNotionClient.DATABASES.create.return_value = {"id": "db-new"}
+        _FakeSupabaseClient.AUTH.get_user.return_value = {"user": None}
+        _FakeSupabaseClient.TABLE.select.return_value.limit.return_value.execute.return_value = (
+            SimpleNamespace(data=[{"id": "schema-ok"}])
+        )
+        _FakeSupabaseClient.TABLE.delete.return_value.eq.return_value.execute.return_value = (
+            SimpleNamespace(data=[])
+        )
+        _FakeSupabaseClient.TABLE.insert.return_value.execute.return_value = (
+            SimpleNamespace(data=[{"id": "boot-row-id"}])
+        )
 
         def boom(path, data):
             raise OSError("disk full")
@@ -196,7 +219,8 @@ class TestInitFlow(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         err = result.stderr
         self.assertTrue(
-            ("usage:" in err.lower()) or ("--notion-token" in err) or
+            ("usage:" in err.lower()) or ("--url" in err) or
+            ("--api-key" in err) or
             ("the following arguments are required" in err.lower()),
             f"stderr missing argparse usage text: {err!r}",
         )
