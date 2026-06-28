@@ -1,12 +1,18 @@
 import base64
 import hashlib
-import hmac
 import secrets
 import struct
 
 from cryptography.fernet import Fernet, InvalidToken
 
-from secret import DEFAULT_PBKDF2_ITERS, SALT_SIZE, derive_key
+
+SALT_SIZE = 16
+DEFAULT_PBKDF2_ITERS = 720_000
+
+
+def derive_key(password: str, salt: bytes, iters: int = DEFAULT_PBKDF2_ITERS) -> bytes:
+    raw = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iters, 32)
+    return base64.urlsafe_b64encode(raw)
 
 
 BLOB_HEADER_SIZE = SALT_SIZE + 4
@@ -35,4 +41,11 @@ def decrypt_token(blob: bytes, password: str) -> str:
     return plaintext.decode("utf-8")
 
 
-__all__ = ["encrypt_token", "decrypt_token", "InvalidToken"]
+__all__ = [
+    "encrypt_token",
+    "decrypt_token",
+    "derive_key",
+    "DEFAULT_PBKDF2_ITERS",
+    "SALT_SIZE",
+    "InvalidToken",
+]
