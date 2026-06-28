@@ -7,9 +7,12 @@ description: Manages an encrypted document vault. Stores password-protected cont
 
 Use this skill to encrypt new information into a password-protected vault and
 to semantically (or by keyword) search through existing vaults. You must
-always invoke the `secret.py` script via your execution tool. The script
-returns at most one matching chunk per query; the rest of the vault is
-hidden from your session.
+always invoke the `secret.py` script via your execution tool. The project
+ships a `bin/secret` wrapper that dispatches to the project venv
+(`.venv/bin/python`) — use it instead of `python3 secret.py` so the
+sentence-transformers stack is on PYTHONPATH. The script returns at most
+one matching chunk per query; the rest of the vault is hidden from your
+session.
 
 ## 🛡️ CORE RULES
 
@@ -24,11 +27,14 @@ hidden from your session.
 ### 1. Storing / appending information
 
 ```
-python3 secret.py encrypt \
+bin/secret encrypt \
     --password "<password>" \
     --file "<filename>" \
     --content "<content>"
 ```
+
+(equivalent: `.venv/bin/python secret.py ...` — use the wrapper unless you
+have a reason to bypass it.)
 
 Behavior:
 - If the file does not exist, it is created and the content is stored as
@@ -44,7 +50,7 @@ Success responses (stdout, one line):
 ### 2. Searching information
 
 ```
-python3 secret.py decrypt \
+bin/secret decrypt \
     --password "<password>" \
     --file "<filename>" \
     --query "<search_parameters>" \
