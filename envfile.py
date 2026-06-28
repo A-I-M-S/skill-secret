@@ -8,7 +8,7 @@ MODE_FILE = 0o600
 MODE_DIR = 0o700
 
 
-def read(path: str) -> dict:
+def read(path: str, *, strict_v4: bool = False) -> dict:
     if not os.path.exists(path):
         raise FileNotFoundError(path)
     data: dict = {}
@@ -27,6 +27,22 @@ def read(path: str) -> dict:
                     f"duplicate key in {path}: {key} at line {lineno}"
                 )
             data[key] = value
+
+    if strict_v4:
+        has_v3_keys = (
+            "SKILL_SECRET_KMS_DB_ID" in data
+            or "SKILL_SECRET_KMS_PARENT_PAGE_ID" in data
+        )
+        has_backend = "SKILL_SECRET_KMS_BACKEND" in data
+        if has_v3_keys and not has_backend:
+            raise ValueError(
+                "v3 .env detected (SKILL_SECRET_KMS_DB_ID or "
+                "SKILL_SECRET_KMS_PARENT_PAGE_ID present without "
+                "SKILL_SECRET_KMS_BACKEND). Migrate to v4 by running "
+                "`secret init` against a Supabase project — see "
+                "CHANGELOG.md."
+            )
+
     return data
 
 
@@ -63,6 +79,24 @@ def require_keys(path: str, keys: Iterable[str]) -> dict:
     return data
 
 
+def detect_backend(path: str) -> str:
+    data = read(path, strict_v4=True)
+    backend = data.get("SKILL_SECRET_KMS_BACKEND")
+    if backend != "supabase":
+        raise ValueError(
+            f"unknown or missing SKILL_SECRET_KMS_BACKEND: {backend!r}. "
+            "v4 only supports backend=supabase."
+        )
+    project_url = data.get("SKILL_SECRET_KMS_PROJECT_URL")
+    api_blob = data.get("SKILL_SECRET_KMS_API_BLOB")
+    if not project_url or not api_blob:
+        raise ValueError(
+            "missing required v4 keys: SKILL_SECRET_KMS_PROJECT_URL and "
+            "SKILL_SECRET_KMS_API_BLOB must both be set."
+        )
+    return "supabase"
+
+
 def _parse_line(line: str, lineno: int) -> tuple | None:
     if "=" not in line:
         raise ValueError(f"malformed .env line {lineno}: {line!r}")
@@ -83,4 +117,4 @@ def _serialize(data: dict) -> str:
     return "".join(lines)
 
 
-__all__ = ["read", "write", "require_keys", "MODE_FILE", "MODE_DIR"]
+__all__ = ["read", "write", "require_keys", "detect_backend", "MODE_FILE", "MODE_DIR"]

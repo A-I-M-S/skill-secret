@@ -163,6 +163,116 @@ class TestEnvfile(unittest.TestCase):
                 raw = f.read()
             self.assertNotIn(plaintext_token.encode("utf-8"), raw)
 
+    def test_15_read_v4_happy_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_BACKEND": "supabase",
+                    "SKILL_SECRET_KMS_PROJECT_URL": "https://abc.supabase.co",
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            out = envfile.read(path)
+            self.assertEqual(out["SKILL_SECRET_KMS_BACKEND"], "supabase")
+            self.assertEqual(
+                out["SKILL_SECRET_KMS_PROJECT_URL"],
+                "https://abc.supabase.co",
+            )
+            self.assertEqual(out["SKILL_SECRET_KMS_API_BLOB"], "aGVsbG8=")
+
+    def test_16_read_v3_detection_raises_value_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_DB_ID": "00000000-0000-0000-0000-000000000001",
+                    "SKILL_SECRET_KMS_PARENT_PAGE_ID": "00000000-0000-0000-0000-000000000002",
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            with self.assertRaises(ValueError) as ctx:
+                envfile.read(path, strict_v4=True)
+            self.assertIn("v3 .env detected", str(ctx.exception))
+            self.assertIn("SKILL_SECRET_KMS_BACKEND", str(ctx.exception))
+
+    def test_17_read_v3_with_backend_does_not_raise(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_BACKEND": "supabase",
+                    "SKILL_SECRET_KMS_DB_ID": "00000000-0000-0000-0000-000000000001",
+                    "SKILL_SECRET_KMS_PARENT_PAGE_ID": "00000000-0000-0000-0000-000000000002",
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            out = envfile.read(path, strict_v4=True)
+            self.assertEqual(out["SKILL_SECRET_KMS_BACKEND"], "supabase")
+
+    def test_18_detect_backend_returns_supabase(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_BACKEND": "supabase",
+                    "SKILL_SECRET_KMS_PROJECT_URL": "https://abc.supabase.co",
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            self.assertEqual(envfile.detect_backend(path), "supabase")
+
+    def test_19_detect_backend_missing_key_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_BACKEND": "supabase",
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            with self.assertRaises(ValueError) as ctx:
+                envfile.detect_backend(path)
+            self.assertIn("SKILL_SECRET_KMS_PROJECT_URL", str(ctx.exception))
+
+    def test_20_detect_backend_v3_file_raises_v3_message(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_DB_ID": "00000000-0000-0000-0000-000000000001",
+                    "SKILL_SECRET_KMS_PARENT_PAGE_ID": "00000000-0000-0000-0000-000000000002",
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            with self.assertRaises(ValueError) as ctx:
+                envfile.detect_backend(path)
+            self.assertIn("v3 .env detected", str(ctx.exception))
+
+    def test_21_round_trip_supabase_url_plaintext(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, ".env")
+            url = "https://my-project.supabase.co"
+            envfile.write(
+                path,
+                {
+                    "SKILL_SECRET_KMS_BACKEND": "supabase",
+                    "SKILL_SECRET_KMS_PROJECT_URL": url,
+                    "SKILL_SECRET_KMS_API_BLOB": "aGVsbG8=",
+                },
+            )
+            out = envfile.read(path)
+            self.assertEqual(out["SKILL_SECRET_KMS_PROJECT_URL"], url)
+            with open(path, "rb") as f:
+                raw = f.read()
+            self.assertIn(url.encode("utf-8"), raw)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,10 +1,12 @@
 # skill-secret dependencies
 # v3 drops the v2 semantic stack (sentence-transformers / torch / numpy).
-# Search now happens server-side in Notion, so the v3 client only needs
-# `cryptography` (for the encrypted API-key blob in .env) and
-# `notion-client` (for the Notion API itself).
+# Search now happens server-side in Notion (v3) and Supabase (v4), so the
+# client only needs `cryptography` (for the encrypted API-key blob in .env),
+# `notion-client` (v3 backend), and `supabase` (v4 backend).
 
 cryptography>=43.0.0,<46.0.0
 notion-client>=2.2.0,<3.0.0
+supabase>=2.4.0,<3.0.0
 
 # Notion KMS client (v3; mandatory for init/take/retrieve/whoami)
+# Supabase KMS client (v4; supersedes notion-client — see CHANGELOG)
