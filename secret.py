@@ -1,5 +1,5 @@
 # skill-secret: Secret Courier Vault
-# v3: Notion KMS-backed encrypted notes.
+# v4: Supabase KMS-backed encrypted notes.
 # This module is an argparse shim; all behavior lives in flows.py.
 
 import argparse
@@ -10,7 +10,7 @@ import flows
 
 def main():
     p = argparse.ArgumentParser(
-        description="Secret Courier Vault (v3: Notion KMS)",
+        description="Secret Courier Vault (v4: Supabase KMS)",
     )
     p.add_argument(
         "--env-file",
@@ -22,9 +22,11 @@ def main():
     )
     sub = p.add_subparsers(dest="command", required=True)
 
-    init_p = sub.add_parser("init", help="initialize a new KMS database")
-    init_p.add_argument("--notion-token", required=True)
-    init_p.add_argument("--parent-page-id", required=True)
+    init_p = sub.add_parser(
+        "init", help="initialize a new Supabase KMS database"
+    )
+    init_p.add_argument("--url", required=True)
+    init_p.add_argument("--api-key", required=True)
     init_p.add_argument("--password", required=True)
 
     take_p = sub.add_parser("take", help="store a note in the KMS")
